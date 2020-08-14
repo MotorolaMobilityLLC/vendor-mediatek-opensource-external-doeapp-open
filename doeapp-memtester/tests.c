@@ -14,6 +14,8 @@
  */
 
 #include <sys/types.h>
+#include <sys/stat.h>
+#include <fcntl.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <limits.h>
@@ -61,10 +63,9 @@ char *addr2dram(ull addr)
 #define INPUT_MAX 32
     static char input[INPUT_MAX], *output = NULL;
     static int page_sz;
-    FILE *file;
+    int fd, n, ret;
     static const char *DRAM2ADDR_PATH =
                       "/sys/bus/platform/drivers/emicen_drv/emicen_addr2dram";
-    int n;
 
     if (!page_sz)
         page_sz = getpagesize();
@@ -77,37 +78,68 @@ char *addr2dram(ull addr)
         }
     }
 
-    output[0] = '\0';
+    n = snprintf(input, INPUT_MAX, "%llx", addr);
+    if (n < 0) {
+        fprintf(stderr, "DEBUG: Failed to snprintf(%d)\n", errno);
+        return NULL;
+    }
 
-    file = fopen(DRAM2ADDR_PATH, "r+");
-    if (!file) {
-        fprintf(stderr, "DEBUG: Failed to fopen %s(%d)\n",
+    /*
+     * echo address > DRAM2DAAR_PATH
+     */
+
+    fd = open(DRAM2ADDR_PATH, O_RDWR | O_SYNC);
+    if (fd < 0) {
+        fprintf(stderr, "DEBUG: Failed to open %s(%d)\n",
                 DRAM2ADDR_PATH, errno);
         return NULL;
     }
 
-    n = snprintf(input, INPUT_MAX, "%llx", addr);
-    if (n < 0) {
-        fprintf(stderr, "DEBUG: Failed to snprintf(%d)\n", errno);
-        goto addr2dram_exit;
-    }
-    n = (int)fwrite(input, strlen(input), 1, file);
-    if (n != 1) {
-        fprintf(stderr, "DEBUG: Failed to fwrite %s(%d), n = %d\n",
-                DRAM2ADDR_PATH, errno, n);
-        goto addr2dram_exit;
+    n = 0;
+    while (n < strlen(input)) {
+        ret = write(fd, input, strlen(input));
+        if (ret == -1) {
+            fprintf(stderr, "DEBUG: Failed to write %s(%d)\n",
+                    DRAM2ADDR_PATH, errno);
+            output[0] = '\0';
+            goto addr2dram_exit;
+        } else
+            n += ret;
     }
 
-    n = (int)fread(output, page_sz, 1, file);
-    if ((n != 1) && ferror(file)) {
-        fprintf(stderr, "DEBUG: Failed to fread %s(%d), n = %d\n",
-                DRAM2ADDR_PATH, errno, n);
-        goto addr2dram_exit;
+    if (close(fd) == -1) {
+        fprintf(stderr, "DEBUG: Failed to close %s(%d)\n",
+                DRAM2ADDR_PATH, errno);
+        return NULL;
+    }
+
+    /*
+     * cat DRAM2DAAR_PATH
+     */
+
+    fd = open(DRAM2ADDR_PATH, O_RDWR | O_SYNC);
+    if (fd < 0) {
+        fprintf(stderr, "DEBUG: Failed to open %s(%d)\n",
+                DRAM2ADDR_PATH, errno);
+        return NULL;
+    }
+
+    n = 0;
+    while (n < page_sz) {
+        ret = read(fd, output + n, page_sz);
+        if (ret == 0)
+            break;
+        else if (n == -1) {
+            fprintf(stderr, "DEBUG: Failed to read %s(%d)\n",
+                    DRAM2ADDR_PATH, errno);
+            output[0] = '\0';
+        } else
+            n += ret;
     }
 
 addr2dram_exit:
-    if (fclose(file)) {
-        fprintf(stderr, "DEBUG: Failed to fclose %s(%d)\n",
+    if (close(fd) == -1) {
+        fprintf(stderr, "DEBUG: Failed to close %s(%d)\n",
                 DRAM2ADDR_PATH, errno);
     }
 
