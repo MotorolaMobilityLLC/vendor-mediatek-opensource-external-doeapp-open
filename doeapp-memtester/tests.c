@@ -19,6 +19,7 @@
 #include <limits.h>
 #include <unistd.h>
 #include <errno.h>
+#include <string.h>
 
 #include "types.h"
 #include "sizes.h"
@@ -55,6 +56,64 @@ int report_err(const char *module, const char *message)
     }
 }
 
+char *addr2dram(ull addr)
+{
+#define INPUT_MAX 32
+    static char input[INPUT_MAX], *output = NULL;
+    static int page_sz;
+    FILE *file;
+    static const char *DRAM2ADDR_PATH =
+                      "/sys/bus/platform/drivers/emicen_drv/emicen_addr2dram";
+    int n;
+
+    if (!page_sz)
+        page_sz = getpagesize();
+
+    if (!output) {
+        output = (char *)malloc(page_sz);
+        if (!output) {
+            fprintf(stderr, "DEBUG: Failed to malloc(%d)\n", errno);
+            return NULL;
+        }
+    }
+
+    output[0] = '\0';
+
+    file = fopen(DRAM2ADDR_PATH, "r+");
+    if (!file) {
+        fprintf(stderr, "DEBUG: Failed to fopen %s(%d)\n",
+                DRAM2ADDR_PATH, errno);
+        return NULL;
+    }
+
+    n = snprintf(input, INPUT_MAX, "%llx", addr);
+    if (n < 0) {
+        fprintf(stderr, "DEBUG: Failed to snprintf(%d)\n", errno);
+        goto addr2dram_exit;
+    }
+    n = (int)fwrite(input, strlen(input), 1, file);
+    if (n != 1) {
+        fprintf(stderr, "DEBUG: Failed to fwrite %s(%d), n = %d\n",
+                DRAM2ADDR_PATH, errno, n);
+        goto addr2dram_exit;
+    }
+
+    n = (int)fread(output, page_sz, 1, file);
+    if ((n != 1) && ferror(file)) {
+        fprintf(stderr, "DEBUG: Failed to fread %s(%d), n = %d\n",
+                DRAM2ADDR_PATH, errno, n);
+        goto addr2dram_exit;
+    }
+
+addr2dram_exit:
+    if (fclose(file)) {
+        fprintf(stderr, "DEBUG: Failed to fclose %s(%d)\n",
+                DRAM2ADDR_PATH, errno);
+    }
+
+    return output;
+}
+
 int compare_regions(ulv *bufa, ulv *bufb, size_t count) {
     int r = 0;
     size_t i;
@@ -73,6 +132,9 @@ int compare_regions(ulv *bufa, ulv *bufb, size_t count) {
                         "FAILURE: 0x%08lx != 0x%08lx at physical address "
                         "0x%08lx.\n", 
                         v1, v2, physaddr);
+                fprintf(stderr,
+                        "DEBUG: phyaddr to DRAM point of view\n%s\n",
+                        addr2dram(physaddr));
             } else {
                 fprintf(stderr, 
                         "FAILURE: 0x%08lx != 0x%08lx at offset 0x%08lx.\n", 
@@ -82,6 +144,12 @@ int compare_regions(ulv *bufa, ulv *bufb, size_t count) {
                         "vaddr2 %p paddr2 0x%llx.\n",
                         p1, virt2phys((ull)p1), \
                         p2, virt2phys((ull)p2));
+                fprintf(stderr,
+                        "DEBUG: paddr1 to DRAM point of view\n%s\n",
+                        addr2dram(virt2phys((ull)p1)));
+                fprintf(stderr,
+                        "DEBUG: paddr2 to DRAM point of view\n%s\n",
+                        addr2dram(virt2phys((ull)p2)));
                 if (find_byteinvert(v1, v2)) {
                     fprintf(stderr,
                             "DEBUG: find byte-invert.\n");
@@ -128,6 +196,10 @@ int test_stuck_address(ulv *bufa, size_t count) {
                             "FAILURE: possible bad address line at physical "
                             "address 0x%08lx.\n", 
                             physaddr);
+                    fprintf(stderr,
+                            "DEBUG: physical address to "
+                            "DRAM point of view\n%s\n",
+                            addr2dram((ull)physaddr));
                 } else {
                     fprintf(stderr, 
                             "FAILURE: possible bad address line at offset "
