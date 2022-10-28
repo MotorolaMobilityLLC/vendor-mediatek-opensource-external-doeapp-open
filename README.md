@@ -1,0 +1,1 @@
+# vendor-mediatek-opensource-external-doeapp-open
